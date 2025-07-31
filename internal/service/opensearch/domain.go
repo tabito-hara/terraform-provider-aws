@@ -1061,26 +1061,18 @@ func resourceDomainUpdate(ctx context.Context, d *schema.ResourceData, meta any)
 		}
 
 		if d.HasChange("advanced_security_options") {
-			if v, ok := d.GetOk("advanced_security_options"); ok && len(v.([]any)) > 0 && v.([]any)[0] != nil {
-				if _, ok := v.([]any)[0].(map[string]any)["master_user_options"]; ok  && {
-					// If the write-only value is not set, we can skip the check
-					// as it will be set in the next step.
-					return diags
-			}
-			// get write-only value from configuration
-			if _, ok := v.([]any)[0].(map[string]any)["master_user_password_wo_version"]; !ok {
-				return sdkdiag.AppendErrorf(diags, "advanced_security_options.master_user_password_wo_version is required")
-			}
-			var masterUserPasswordWO string
-			if d.HasChange("advanced_security_options.0.master_user_password_wo_version") {
-				var di diag.Diagnostics
-				masterUserPasswordWO, di = flex.GetWriteOnlyStringValue(d, cty.GetAttrPath("master_user_password_wo"))
-				diags = append(diags, di...)
-				if diags.HasError() {
-					return diags
+			masterUserPasswordWO := ""
+			if v, ok := d.Get("advanced_security_options").([]any); ok && len(v) > 0 && v[0] != nil {
+				if v, ok := v[0].(map[string]any)["master_user_options"].([]any); ok && len(v) > 0 && v[0] != nil {
+					if d.HasChange("advanced_security_options.0.master_user_options.0.master_user_password_wo_version") {
+						var di diag.Diagnostics
+						masterUserPasswordWO, di = flex.GetWriteOnlyStringValue(d, cty.GetAttrPath("advanced_security_options.0.master_user_options.0.master_user_password_wo"))
+						diags = append(diags, di...)
+						if diags.HasError() {
+							return diags
+						}
+					}
 				}
-			} else {
-				masterUserPasswordWO = ""
 			}
 			input.AdvancedSecurityOptions = expandAdvancedSecurityOptions(d.Get("advanced_security_options").([]any), masterUserPasswordWO)
 		}
