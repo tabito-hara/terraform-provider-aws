@@ -20,7 +20,8 @@ func TestAccGlue_serial(t *testing.T) {
 			acctest.CtDisappears:                              testAccCatalogTableOptimizer_disappears,
 			"retentionConfiguration":                          testAccCatalogTableOptimizer_RetentionConfiguration,
 			"retentionConfigurationWithRunRateInHours":        testAccCatalogTableOptimizer_RetentionConfigurationWithRunRateInHours,
-			"update": testAccCatalogTableOptimizer_update,
+			"update":           testAccCatalogTableOptimizer_update,
+			"vpcConfiguration": testAccCatalogTableOptimizer_vpcConfiguration,
 		},
 		"DataCatalogEncryptionSettings": {
 			acctest.CtBasic: testAccDataCatalogEncryptionSettings_basic,

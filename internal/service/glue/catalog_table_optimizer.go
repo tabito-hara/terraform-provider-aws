@@ -320,6 +320,10 @@ func (r *catalogTableOptimizerResource) Update(ctx context.Context, request reso
 		input := glue.UpdateTableOptimizerInput{}
 		response.Diagnostics.Append(fwflex.Expand(ctx, plan, &input, fwflex.WithFieldNamePrefix("TableOptimizer"))...)
 
+		if input.TableOptimizerConfiguration.VpcConfiguration == nil {
+			input.TableOptimizerConfiguration.VpcConfiguration = &awstypes.TableOptimizerVpcConfigurationMemberGlueConnectionName{}
+		}
+
 		if response.Diagnostics.HasError() {
 			return
 		}
@@ -441,6 +445,7 @@ type configurationData struct {
 	RoleARN                         fwtypes.ARN                                                          `tfsdk:"role_arn"`
 	RetentionConfiguration          fwtypes.ListNestedObjectValueOf[retentionConfigurationData]          `tfsdk:"retention_configuration"`
 	OrphanFileDeletionConfiguration fwtypes.ListNestedObjectValueOf[orphanFileDeletionConfigurationData] `tfsdk:"orphan_file_deletion_configuration"`
+	VPCConfiguration                fwtypes.ListNestedObjectValueOf[vpcConfigurationModel]               `tfsdk:"vpc_configuration"`
 }
 
 type retentionConfigurationData struct {

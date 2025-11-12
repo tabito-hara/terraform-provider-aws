@@ -339,6 +339,56 @@ func testAccCatalogTableOptimizer_DeleteOrphanFileConfigurationWithRunRateInHour
 	})
 }
 
+func testAccCatalogTableOptimizer_vpcConfiguration(t *testing.T) {
+	ctx := acctest.Context(t)
+	var catalogTableOptimizer glue.GetTableOptimizerOutput
+
+	resourceName := "aws_glue_catalog_table_optimizer.test"
+
+	rName := sdkacctest.RandomWithPrefix(acctest.ResourcePrefix)
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(ctx, t) },
+		ErrorCheck:               acctest.ErrorCheck(t, names.GlueServiceID),
+		ProtoV5ProviderFactories: acctest.ProtoV5ProviderFactories,
+		CheckDestroy:             testAccCheckCatalogTableOptimizerDestroy(ctx),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccCatalogTableOptimizerConfig_vpcConfiguration(rName),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckCatalogTableOptimizerExists(ctx, resourceName, &catalogTableOptimizer),
+					acctest.CheckResourceAttrAccountID(ctx, resourceName, names.AttrCatalogID),
+					resource.TestCheckResourceAttr(resourceName, names.AttrDatabaseName, rName),
+					resource.TestCheckResourceAttr(resourceName, names.AttrTableName, rName),
+					resource.TestCheckResourceAttr(resourceName, names.AttrType, "compaction"),
+					resource.TestCheckResourceAttr(resourceName, "configuration.0.enabled", acctest.CtTrue),
+					resource.TestCheckResourceAttr(resourceName, "configuration.0.vpc_configuration.#", "1"),
+					resource.TestCheckResourceAttr(resourceName, "configuration.0.vpc_configuration.0.glue_connection_name", rName),
+				),
+			},
+			{
+				ResourceName:                         resourceName,
+				ImportStateIdFunc:                    testAccCatalogTableOptimizerStateIDFunc(resourceName),
+				ImportStateVerifyIdentifierAttribute: names.AttrTableName,
+				ImportState:                          true,
+				ImportStateVerify:                    true,
+			},
+			{
+				Config: testAccCatalogTableOptimizerConfig_vpcConfigurationRemoved(rName),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckCatalogTableOptimizerExists(ctx, resourceName, &catalogTableOptimizer),
+					acctest.CheckResourceAttrAccountID(ctx, resourceName, names.AttrCatalogID),
+					resource.TestCheckResourceAttr(resourceName, names.AttrDatabaseName, rName),
+					resource.TestCheckResourceAttr(resourceName, names.AttrTableName, rName),
+					resource.TestCheckResourceAttr(resourceName, names.AttrType, "compaction"),
+					resource.TestCheckResourceAttr(resourceName, "configuration.0.enabled", acctest.CtTrue),
+					resource.TestCheckResourceAttr(resourceName, "configuration.0.vpc_configuration.#", "0"),
+				),
+			},
+		},
+	})
+}
+
 func testAccCatalogTableOptimizerStateIDFunc(resourceName string) resource.ImportStateIdFunc {
 	return func(s *terraform.State) (string, error) {
 		rs, ok := s.RootModule().Resources[resourceName]
@@ -672,9 +722,62 @@ resource "aws_glue_catalog_table_optimizer" "test" {
 
 func testAccCatalogTableOptimizerConfig_vpcConfiguration(rName string) string {
 	return acctest.ConfigCompose(
-		testAccCatalogTableOptimizerConfig_baseConfig(rName), `
-resource "aws_gl"
+		acctest.ConfigVPCWithSubnets(rName, 1),
+		testAccCatalogTableOptimizerConfig_baseConfig(rName),
+		fmt.Sprintf(`
+data "aws_iam_policy_document" "test_vpc" {
+  statement {
+    actions = [
+      "ec2:CreateNetworkInterface",
+      "ec2:CreateTags",
+      "ec2:DeleteNetworkInterface",
+      "ec2:DeleteTags",
+      "ec2:DescribeNetworkInterfaces",
+      "ec2:DescribeRouteTables",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeVpcEndpoints",
+      "ec2:DescribeVpcs"
+    ]
+    effect    = "Allow"
+    resources = ["*"]
+  }
+  statement {
+    actions = [
+      "glue:GetConnection",
+    ]
+    effect    = "Allow"
+    resources = ["arn:${data.aws_partition.current.partition}:logs:*:*:*"]
+  }
+}
 
+resource "aws_iam_role_policy" "test_vpc" {
+  role   = aws_iam_role.test.id
+  policy = data.aws_iam_policy_document.test_vpc.json
+}
+
+resource "aws_security_group" "test" {
+  name   = %[1]q
+  vpc_id = aws_vpc.test.id
+
+  ingress {
+    protocol  = "tcp"
+    self      = true
+    from_port = 1
+    to_port   = 65535
+  }
+}
+
+resource "aws_glue_connection" "test" {
+  connection_type = "NETWORK"
+  name            = %[1]q
+
+  physical_connection_requirements {
+    availability_zone      = aws_subnet.test[0].availability_zone
+    security_group_id_list = [aws_security_group.test.id]
+    subnet_id              = aws_subnet.test[0].id
+  }
+}
 
 resource "aws_glue_catalog_table_optimizer" "test" {
   catalog_id    = data.aws_caller_identity.current.account_id
@@ -687,10 +790,90 @@ resource "aws_glue_catalog_table_optimizer" "test" {
     enabled  = true
 
     vpc_configuration {
-      glue_connection_name = "my-glue-connection"
+      glue_connection_name = aws_glue_connection.test.name
     }
   }
+  depends_on = [
+    aws_iam_role_policy.test_vpc,
+    aws_lakeformation_permissions.test,
+  ]
 }
-`,
-	)
+`, rName))
+}
+
+func testAccCatalogTableOptimizerConfig_vpcConfigurationRemoved(rName string) string {
+	return acctest.ConfigCompose(
+		acctest.ConfigVPCWithSubnets(rName, 1),
+		testAccCatalogTableOptimizerConfig_baseConfig(rName),
+		fmt.Sprintf(`
+data "aws_iam_policy_document" "test_vpc" {
+  statement {
+    actions = [
+      "ec2:CreateNetworkInterface",
+      "ec2:CreateTags",
+      "ec2:DeleteNetworkInterface",
+      "ec2:DeleteTags",
+      "ec2:DescribeNetworkInterfaces",
+      "ec2:DescribeRouteTables",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeSubnets",
+      "ec2:DescribeVpcEndpoints",
+      "ec2:DescribeVpcs"
+    ]
+    effect    = "Allow"
+    resources = ["*"]
+  }
+  statement {
+    actions = [
+      "glue:GetConnection",
+    ]
+    effect    = "Allow"
+    resources = ["arn:${data.aws_partition.current.partition}:logs:*:*:*"]
+  }
+}
+
+resource "aws_iam_role_policy" "test_vpc" {
+  role   = aws_iam_role.test.id
+  policy = data.aws_iam_policy_document.test_vpc.json
+}
+
+resource "aws_security_group" "test" {
+  name   = %[1]q
+  vpc_id = aws_vpc.test.id
+
+  ingress {
+    protocol  = "tcp"
+    self      = true
+    from_port = 1
+    to_port   = 65535
+  }
+}
+
+resource "aws_glue_connection" "test" {
+  connection_type = "NETWORK"
+  name            = %[1]q
+
+  physical_connection_requirements {
+    availability_zone      = aws_subnet.test[0].availability_zone
+    security_group_id_list = [aws_security_group.test.id]
+    subnet_id              = aws_subnet.test[0].id
+  }
+}
+
+resource "aws_glue_catalog_table_optimizer" "test" {
+  catalog_id    = data.aws_caller_identity.current.account_id
+  database_name = aws_glue_catalog_database.test.name
+  table_name    = aws_glue_catalog_table.test.name
+  type          = "compaction"
+
+  configuration {
+    role_arn = aws_iam_role.test.arn
+    enabled  = true
+  }
+  depends_on = [
+    aws_iam_role_policy.test_vpc,
+    aws_lakeformation_permissions.test,
+  ]
+}
+`, rName))
 }
