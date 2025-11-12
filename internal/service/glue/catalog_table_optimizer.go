@@ -5,6 +5,7 @@ package glue
 
 import (
 	"context"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/glue"
@@ -160,6 +161,19 @@ func (r *catalogTableOptimizerResource) Schema(ctx context.Context, _ resource.S
 												},
 											},
 										},
+									},
+								},
+							},
+						},
+						"vpc_configuration": schema.ListNestedBlock{
+							CustomType: fwtypes.NewListNestedObjectTypeOf[vpcConfigurationModel](ctx),
+							Validators: []validator.List{
+								listvalidator.SizeAtMost(1),
+							},
+							NestedObject: schema.NestedBlockObject{
+								Attributes: map[string]schema.Attribute{
+									"glue_connection_name": schema.StringAttribute{
+										Optional: true,
 									},
 								},
 							},
@@ -450,6 +464,10 @@ type icebergOrphanFileDeletionConfigurationData struct {
 	RunRateInHours                  types.Int32  `tfsdk:"run_rate_in_hours"`
 }
 
+type vpcConfigurationModel struct {
+	GlueConnectionName types.String `tfsdk:"glue_connection_name"`
+}
+
 func findCatalogTableOptimizer(ctx context.Context, conn *glue.Client, catalogID, dbName, tableName, optimizerType string) (*glue.GetTableOptimizerOutput, error) {
 	input := &glue.GetTableOptimizerInput{
 		CatalogId:    aws.String(catalogID),
@@ -476,4 +494,30 @@ func findCatalogTableOptimizer(ctx context.Context, conn *glue.Client, catalogID
 	}
 
 	return output, nil
+}
+
+var (
+	_ fwflex.Expander  = vpcConfigurationModel{}
+	_ fwflex.Flattener = &vpcConfigurationModel{}
+)
+
+func (m vpcConfigurationModel) Expand(ctx context.Context) (any, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
+	switch {
+	case !m.GlueConnectionName.IsNull():
+		var r awstypes.TableOptimizerVpcConfigurationMemberGlueConnectionName
+		r.Value = fwflex.StringValueFromFramework(ctx, m.GlueConnectionName)
+		return &r, diags
+	}
+	return nil, diags
+}
+
+func (m *vpcConfigurationModel) Flatten(ctx context.Context, v any) diag.Diagnostics {
+	var diags diag.Diagnostics
+	switch t := v.(type) {
+	case awstypes.TableOptimizerVpcConfigurationMemberGlueConnectionName:
+		m.GlueConnectionName = fwflex.StringToFramework(ctx, &t.Value)
+	}
+	return diags
 }
