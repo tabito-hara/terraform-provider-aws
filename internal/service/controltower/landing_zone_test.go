@@ -40,6 +40,7 @@ func testAccLandingZone_basic(t *testing.T) {
 					acctest.CheckResourceAttrRegionalARNFormat(ctx, resourceName, names.AttrARN, "controltower", "landingzone/${id}"),
 					resource.TestCheckResourceAttr(resourceName, "drift_status.#", "1"),
 					resource.TestCheckResourceAttrSet(resourceName, "latest_available_version"),
+					resource.TestCheckResourceAttr(resourceName, "remediation_types.#", "0"),
 					resource.TestCheckResourceAttr(resourceName, names.AttrVersion, "1.0"),
 				),
 			},
@@ -47,6 +48,52 @@ func testAccLandingZone_basic(t *testing.T) {
 				ResourceName:      resourceName,
 				ImportState:       true,
 				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+func testAccLandingZone_remediationTypes(t *testing.T) {
+	ctx := acctest.Context(t)
+	resourceName := "aws_controltower_landing_zone.test"
+
+	resource.Test(t, resource.TestCase{
+		PreCheck: func() {
+			acctest.PreCheck(ctx, t)
+			acctest.PreCheckOrganizationManagementAccount(ctx, t)
+			testAccPreCheck(ctx, t)
+			testAccPreCheckNoLandingZone(ctx, t)
+		},
+		ErrorCheck:               acctest.ErrorCheck(t, names.ControlTowerServiceID),
+		CheckDestroy:             testAccCheckLandingZoneDestroy(ctx),
+		ProtoV5ProviderFactories: acctest.ProtoV5ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccLandingZoneConfig_remediationTypes,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckLandingZoneExists(ctx, resourceName),
+					acctest.CheckResourceAttrRegionalARNFormat(ctx, resourceName, names.AttrARN, "controltower", "landingzone/${id}"),
+					resource.TestCheckResourceAttr(resourceName, "drift_status.#", "1"),
+					resource.TestCheckResourceAttrSet(resourceName, "latest_available_version"),
+					resource.TestCheckResourceAttr(resourceName, names.AttrVersion, "1.0"),
+					resource.TestCheckResourceAttr(resourceName, "remediation_types.#", "1"),
+					resource.TestCheckResourceAttr(resourceName, "remediation_types.0", "INHERITANCE_DRIFT"),
+				),
+			},
+			{
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+			{
+				Config: testAccLandingZoneConfig_basic,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckLandingZoneExists(ctx, resourceName),
+					acctest.CheckResourceAttrRegionalARNFormat(ctx, resourceName, names.AttrARN, "controltower", "landingzone/${id}"),
+					resource.TestCheckResourceAttr(resourceName, "drift_status.#", "1"),
+					resource.TestCheckResourceAttrSet(resourceName, "latest_available_version"),
+					resource.TestCheckResourceAttr(resourceName, names.AttrVersion, "1.0"),
+				),
 			},
 		},
 	})
@@ -228,3 +275,13 @@ resource "aws_controltower_landing_zone" "test" {
 }
 `, acctest.Region(), landingZoneVersion, tagKey1, tagValue1, tagKey2, tagValue2)
 }
+
+var testAccLandingZoneConfig_remediationTypes = fmt.Sprintf(`
+resource "aws_controltower_landing_zone" "test" {
+  manifest_json = file("${path.module}/test-fixtures/LandingZoneManifest.json")
+
+  remediation_types = ["INHERITANCE_DRIFT"]
+
+  version = %[1]q
+}
+`, landingZoneVersion)
