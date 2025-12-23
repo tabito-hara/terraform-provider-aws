@@ -239,8 +239,63 @@ func (r *agentRuntimeResource) Schema(ctx context.Context, request resource.Sche
 										CustomType: fwtypes.SetOfStringType,
 										Optional:   true,
 									},
+									"allowed_scopes": schema.SetAttribute{
+										CustomType: fwtypes.SetOfStringType,
+										Optional:   true,
+									},
 									"discovery_url": schema.StringAttribute{
 										Required: true,
+									},
+								},
+								Blocks: map[string]schema.Block{
+									"custom_claim": schema.SetNestedBlock{
+										CustomType: fwtypes.NewSetNestedObjectTypeOf[customJWTAuthorizerCustomClaimsModel](ctx),
+										NestedObject: schema.NestedBlockObject{
+											Attributes: map[string]schema.Attribute{
+												"inbound_token_claim_name": schema.StringAttribute{
+													Required: true,
+												},
+												"inbound_token_claim_value_type": schema.StringAttribute{
+													CustomType: fwtypes.StringEnumType[awstypes.InboundTokenClaimValueType](),
+													Required:   true,
+												},
+											},
+											Blocks: map[string]schema.Block{
+												"authorizing_claim_match_value": schema.ListNestedBlock{
+													CustomType: fwtypes.NewListNestedObjectTypeOf[customJWTAuthorizerCustomClaimsAuthorizingClaimMatchValueModel](ctx),
+													Validators: []validator.List{
+														listvalidator.SizeAtMost(1),
+													},
+													NestedObject: schema.NestedBlockObject{
+														Attributes: map[string]schema.Attribute{
+															"claim_match_operator": schema.StringAttribute{
+																CustomType: fwtypes.StringEnumType[awstypes.ClaimMatchOperatorType](),
+																Required:   true,
+															},
+														},
+														Blocks: map[string]schema.Block{
+															"claim_match_value": schema.ListNestedBlock{
+																CustomType: fwtypes.NewListNestedObjectTypeOf[customJWTAuthorizerCustomClaimsAuthorizingClaimMatchValueClaimMatchValueModel](ctx),
+																Validators: []validator.List{
+																	listvalidator.SizeAtMost(1),
+																},
+																NestedObject: schema.NestedBlockObject{
+																	Attributes: map[string]schema.Attribute{
+																		"match_value_string": schema.StringAttribute{
+																			Optional: true,
+																		},
+																		"match_value_string_list": schema.SetAttribute{
+																			CustomType: fwtypes.SetOfStringType,
+																			Optional:   true,
+																		},
+																	},
+																},
+															},
+														},
+													},
+												},
+											},
+										},
 									},
 								},
 							},
@@ -794,9 +849,84 @@ func (m authorizerConfigurationModel) Expand(ctx context.Context) (any, diag.Dia
 }
 
 type customJWTAuthorizerConfigurationModel struct {
-	AllowedAudience fwtypes.SetOfString `tfsdk:"allowed_audience"`
-	AllowedClients  fwtypes.SetOfString `tfsdk:"allowed_clients"`
-	DiscoveryURL    types.String        `tfsdk:"discovery_url"`
+	AllowedAudience fwtypes.SetOfString                                                  `tfsdk:"allowed_audience"`
+	AllowedClients  fwtypes.SetOfString                                                  `tfsdk:"allowed_clients"`
+	AllowedScopes   fwtypes.SetOfString                                                  `tfsdk:"allowed_scopes"`
+	CustomClaim     fwtypes.SetNestedObjectValueOf[customJWTAuthorizerCustomClaimsModel] `tfsdk:"custom_claim"`
+	DiscoveryURL    types.String                                                         `tfsdk:"discovery_url"`
+}
+
+type customJWTAuthorizerCustomClaimsModel struct {
+	InboundTokenClaimName      types.String                                                                                    `tfsdk:"inbound_token_claim_name"`
+	InboundTokenClaimValueType fwtypes.StringEnum[awstypes.InboundTokenClaimValueType]                                         `tfsdk:"inbound_token_claim_value_type"`
+	AuthorizingClaimMatchValue fwtypes.ListNestedObjectValueOf[customJWTAuthorizerCustomClaimsAuthorizingClaimMatchValueModel] `tfsdk:"authorizing_claim_match_value"`
+}
+
+type customJWTAuthorizerCustomClaimsAuthorizingClaimMatchValueModel struct {
+	ClaimMatchOperator fwtypes.StringEnum[awstypes.ClaimMatchOperatorType]                                                            `tfsdk:"claim_match_operator"`
+	ClaimMatchValue    fwtypes.ListNestedObjectValueOf[customJWTAuthorizerCustomClaimsAuthorizingClaimMatchValueClaimMatchValueModel] `tfsdk:"claim_match_value"`
+}
+
+type customJWTAuthorizerCustomClaimsAuthorizingClaimMatchValueClaimMatchValueModel struct {
+	MatchValueString     types.String        `tfsdk:"match_value_string"`
+	MatchValueStringList fwtypes.SetOfString `tfsdk:"match_value_string_list"`
+}
+
+var (
+	_ fwflex.Expander  = customJWTAuthorizerCustomClaimsAuthorizingClaimMatchValueClaimMatchValueModel{}
+	_ fwflex.Flattener = &customJWTAuthorizerCustomClaimsAuthorizingClaimMatchValueClaimMatchValueModel{}
+)
+
+func (m customJWTAuthorizerCustomClaimsAuthorizingClaimMatchValueClaimMatchValueModel) Expand(ctx context.Context) (any, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	switch {
+	case !m.MatchValueString.IsNull():
+		var r awstypes.ClaimMatchValueTypeMemberMatchValueString
+		var data customJWTAuthorizerCustomClaimsAuthorizingClaimMatchValueClaimMatchValueModel
+		data.MatchValueString = m.MatchValueString
+		smerr.AddEnrich(ctx, &diags, fwflex.Expand(ctx, &data, &r.Value))
+		if diags.HasError() {
+			return nil, diags
+		}
+		return &r, diags
+	case !m.MatchValueStringList.IsNull():
+		var r awstypes.ClaimMatchValueTypeMemberMatchValueStringList
+		var data customJWTAuthorizerCustomClaimsAuthorizingClaimMatchValueClaimMatchValueModel
+		data.MatchValueStringList = m.MatchValueStringList
+		smerr.AddEnrich(ctx, &diags, fwflex.Expand(ctx, &data, &r.Value))
+		if diags.HasError() {
+			return nil, diags
+		}
+		return &r, diags
+	}
+	return nil, diags
+}
+
+func (m *customJWTAuthorizerCustomClaimsAuthorizingClaimMatchValueClaimMatchValueModel) Flatten(ctx context.Context, v any) diag.Diagnostics {
+	var diags diag.Diagnostics
+	switch t := v.(type) {
+	case awstypes.ClaimMatchValueTypeMemberMatchValueString:
+		var data customJWTAuthorizerCustomClaimsAuthorizingClaimMatchValueClaimMatchValueModel
+		smerr.AddEnrich(ctx, &diags, fwflex.Flatten(ctx, t.Value, &data))
+		if diags.HasError() {
+			return diags
+		}
+		m.MatchValueString = data.MatchValueString
+	case awstypes.ClaimMatchValueTypeMemberMatchValueStringList:
+		var data customJWTAuthorizerCustomClaimsAuthorizingClaimMatchValueClaimMatchValueModel
+		smerr.AddEnrich(ctx, &diags, fwflex.Flatten(ctx, t.Value, &data))
+		if diags.HasError() {
+			return diags
+		}
+		m.MatchValueStringList = data.MatchValueStringList
+
+	default:
+		diags.AddError(
+			"Unsupported Type",
+			fmt.Sprintf("claim match value flatten: %T", v),
+		)
+	}
+	return diags
 }
 
 type lifecycleConfigurationModel struct {
