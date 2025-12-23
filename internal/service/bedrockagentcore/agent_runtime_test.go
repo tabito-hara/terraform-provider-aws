@@ -1222,7 +1222,7 @@ resource "aws_bedrockagentcore_agent_runtime" "test" {
     network_mode = "PUBLIC"
   }
 }
-`, rName, rImageUri, discoveryUrl, strings.Join(audience, `", "`), strings.Join(client, `", `), strings.Join(scopes, `", "`),
+`, rName, rImageUri, discoveryUrl, strings.Join(audience, `", "`), strings.Join(client, `", "`), strings.Join(scopes, `", "`),
 		claimName1, claimValue, claimName2, strings.Join(claimValueList, `", "`)))
 }
 
