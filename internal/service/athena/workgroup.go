@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/YakDriver/regexache"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -21,6 +22,7 @@ import (
 	"github.com/hashicorp/terraform-provider-aws/internal/enum"
 	"github.com/hashicorp/terraform-provider-aws/internal/errs"
 	"github.com/hashicorp/terraform-provider-aws/internal/errs/sdkdiag"
+	"github.com/hashicorp/terraform-provider-aws/internal/flex"
 	"github.com/hashicorp/terraform-provider-aws/internal/retry"
 	tftags "github.com/hashicorp/terraform-provider-aws/internal/tags"
 	"github.com/hashicorp/terraform-provider-aws/internal/tfresource"
@@ -63,10 +65,93 @@ func resourceWorkGroup() *schema.Resource {
 								validation.IntInSlice([]int{0}),
 							),
 						},
+						"customer_content_encryption_configuration": {
+							Type:     schema.TypeList,
+							Optional: true,
+							MaxItems: 1,
+							Elem: &schema.Resource{
+								Schema: map[string]*schema.Schema{
+									names.AttrKMSKey: {
+										Type:         schema.TypeString,
+										Optional:     true,
+										ValidateFunc: validation.StringMatch(regexache.MustCompile(`^arn:aws[a-z\-]*:kms:([a-z0-9\-]+):\d{12}:key/?[a-zA-Z_0-9+=,.@\-_/]+$|^arn:aws[a-z\-]*:kms:([a-z0-9\-]+):\d{12}:alias/?[a-zA-Z_0-9+=,.@\-_/]+$|^alias/[a-zA-Z0-9/_-]+$|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}`), "must be a valid KMS Key ARN or Alias"),
+									},
+								},
+							},
+						},
+						"enable_minimum_encryption_configuration": {
+							Type:     schema.TypeBool,
+							Optional: true,
+							Computed: true,
+						},
 						"enforce_workgroup_configuration": {
 							Type:     schema.TypeBool,
 							Optional: true,
 							Default:  true,
+						},
+						"engine_configuration": {
+							Type:     schema.TypeList,
+							Optional: true,
+							MaxItems: 1,
+							Elem: &schema.Resource{
+								Schema: map[string]*schema.Schema{
+									"additional_configs": {
+										Type:     schema.TypeMap,
+										Optional: true,
+										Elem: &schema.Schema{
+											Type:         schema.TypeString,
+											ValidateFunc: validation.StringLenBetween(1, 51200),
+										},
+									},
+									"classification": {
+										Type:     schema.TypeSet,
+										Optional: true,
+										Elem: &schema.Resource{
+											Schema: map[string]*schema.Schema{
+												names.AttrName: {
+													Type:         schema.TypeString,
+													Optional:     true,
+													ValidateFunc: validation.StringLenBetween(1, 128),
+												},
+												names.AttrProperties: {
+													Type:     schema.TypeMap,
+													Optional: true,
+													Elem: &schema.Schema{
+														Type:         schema.TypeString,
+														ValidateFunc: validation.StringLenBetween(1, 51200),
+													},
+												},
+											},
+										},
+									},
+									"coordinator_dpu_size": {
+										Type:         schema.TypeInt,
+										Optional:     true,
+										Computed:     true,
+										ValidateFunc: validation.IntBetween(1, 1),
+									},
+									"default_executor_dpu_size": {
+										Type:         schema.TypeInt,
+										Optional:     true,
+										Computed:     true,
+										ValidateFunc: validation.IntBetween(1, 1),
+									},
+									"max_concurrent_dpus": {
+										Type:         schema.TypeInt,
+										Optional:     true,
+										Computed:     true,
+										ValidateFunc: validation.IntBetween(2, 5000),
+									},
+									"spark_properties": {
+										Type:     schema.TypeMap,
+										Optional: true,
+										Elem: &schema.Schema{
+											Type:         schema.TypeString,
+											ValidateFunc: validation.StringLenBetween(1, 51200),
+										},
+									},
+								},
+							},
 						},
 						names.AttrEngineVersion: {
 							Type:     schema.TypeList,
@@ -136,10 +221,200 @@ func resourceWorkGroup() *schema.Resource {
 								},
 							},
 						},
+						"monitoring_configuration": {
+							Type:             schema.TypeList,
+							Optional:         true,
+							MaxItems:         1,
+							DiffSuppressFunc: verify.SuppressMissingOptionalConfigurationBlock,
+							Elem: &schema.Resource{
+								Schema: map[string]*schema.Schema{
+									"cloud_watch_logging_configuration": {
+										Type:     schema.TypeList,
+										Optional: true,
+										MaxItems: 1,
+										DiffSuppressFunc: func(_, old, new string, d *schema.ResourceData) bool {
+											o, n := d.GetChange("configuration.0.monitoring_configuration.0.cloud_watch_logging_configuration")
+											if o != nil && n != nil {
+												if v, ok := o.([]any); ok && len(v) == 0 {
+													if v, ok := n.([]any); ok && len(v) > 0 && v[0] != nil {
+														vm := v[0].(map[string]any)
+														if v, ok := vm[names.AttrEnabled].(bool); ok && !v {
+															return true
+														}
+													}
+												}
+											}
+											return false
+										},
+										Elem: &schema.Resource{
+											Schema: map[string]*schema.Schema{
+												names.AttrEnabled: {
+													Type:     schema.TypeBool,
+													Required: true,
+													DiffSuppressFunc: func(_, old, new string, d *schema.ResourceData) bool {
+														if old == "" && new == "false" {
+															return true
+														}
+														return false
+													},
+												},
+												"log_group": {
+													Type:             schema.TypeString,
+													Optional:         true,
+													DiffSuppressFunc: diffSuppressWorkGroupConfigurationMonitoringCloudWatchLogging,
+													ValidateFunc: validation.All(
+														validation.StringMatch(regexache.MustCompile(`^[a-zA-Z0-9._/-]+$`), "must contain only alphanumeric characters, periods, underscores, hyphens, and slashes"),
+														validation.StringLenBetween(1, 512),
+													),
+												},
+												"log_stream_name_prefix": {
+													Type:             schema.TypeString,
+													Optional:         true,
+													DiffSuppressFunc: diffSuppressWorkGroupConfigurationMonitoringCloudWatchLogging,
+													ValidateFunc: validation.All(
+														validation.StringMatch(regexache.MustCompile(`^[a-zA-Z0-9._/-]+$`), "must contain only alphanumeric characters, periods, underscores, hyphens, and slashes"),
+														validation.StringLenBetween(1, 512),
+													),
+												},
+												"log_type": {
+													Type:             schema.TypeSet,
+													Optional:         true,
+													DiffSuppressFunc: diffSuppressWorkGroupConfigurationMonitoringCloudWatchLogging,
+													Elem: &schema.Resource{
+														Schema: map[string]*schema.Schema{
+															names.AttrKey: {
+																Type:     schema.TypeString,
+																Required: true,
+															},
+															names.AttrValues: {
+																Type:     schema.TypeSet,
+																Required: true,
+																Elem: &schema.Schema{
+																	Type: schema.TypeString,
+																},
+															},
+														},
+													},
+												},
+											},
+										},
+									},
+									"managed_logging_configuration": {
+										Type:     schema.TypeList,
+										Optional: true,
+										MaxItems: 1,
+										DiffSuppressFunc: func(_, old, new string, d *schema.ResourceData) bool {
+											o, n := d.GetChange("configuration.0.monitoring_configuration.0.managed_logging_configuration")
+											if o != nil && n != nil {
+												if v, ok := o.([]any); ok && len(v) == 0 {
+													if v, ok := n.([]any); ok && len(v) > 0 && v[0] != nil {
+														vm := v[0].(map[string]any)
+														if v, ok := vm[names.AttrEnabled].(bool); ok && !v {
+															return true
+														}
+													}
+												}
+											}
+											return false
+										},
+										Elem: &schema.Resource{
+											Schema: map[string]*schema.Schema{
+												names.AttrEnabled: {
+													Type:     schema.TypeBool,
+													Required: true,
+													DiffSuppressFunc: func(_, old, new string, d *schema.ResourceData) bool {
+														if old == "" && new == "false" {
+															return true
+														}
+														return false
+													},
+												},
+												names.AttrKMSKey: {
+													Type:             schema.TypeString,
+													Optional:         true,
+													DiffSuppressFunc: diffSuppressWorkGroupConfigurationMonitoringManagedLogging,
+													ValidateFunc:     validation.StringMatch(regexache.MustCompile(`^arn:aws[a-z\-]*:kms:([a-z0-9\-]+):\d{12}:key/?[a-zA-Z_0-9+=,.@\-_/]+$|^arn:aws[a-z\-]*:kms:([a-z0-9\-]+):\d{12}:alias/?[a-zA-Z_0-9+=,.@\-_/]+$|^alias/[a-zA-Z0-9/_-]+$|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}`), "must be a valid KMS Key ARN or Alias"),
+												},
+											},
+										},
+									},
+									"s3_logging_configuration": {
+										Type:     schema.TypeList,
+										Optional: true,
+										MaxItems: 1,
+										DiffSuppressFunc: func(_, old, new string, d *schema.ResourceData) bool {
+											o, n := d.GetChange("configuration.0.monitoring_configuration.0.s3_logging_configuration")
+											if o != nil && n != nil {
+												if v, ok := o.([]any); ok && len(v) == 0 {
+													if v, ok := n.([]any); ok && len(v) > 0 && v[0] != nil {
+														vm := v[0].(map[string]any)
+														if v, ok := vm[names.AttrEnabled].(bool); ok && !v {
+															return true
+														}
+													}
+												}
+											}
+											return false
+										},
+										Elem: &schema.Resource{
+											Schema: map[string]*schema.Schema{
+												names.AttrEnabled: {
+													Type:     schema.TypeBool,
+													Required: true,
+													DiffSuppressFunc: func(_, old, new string, d *schema.ResourceData) bool {
+														if old == "" && new == "false" {
+															return true
+														}
+														return false
+													},
+												},
+												names.AttrKMSKey: {
+													Type:             schema.TypeString,
+													Optional:         true,
+													DiffSuppressFunc: diffSuppressWorkGroupConfigurationMonitoringS3Logging,
+													ValidateFunc:     validation.StringMatch(regexache.MustCompile(`^arn:aws[a-z\-]*:kms:([a-z0-9\-]+):\d{12}:key/?[a-zA-Z_0-9+=,.@\-_/]+$|^arn:aws[a-z\-]*:kms:([a-z0-9\-]+):\d{12}:alias/?[a-zA-Z_0-9+=,.@\-_/]+$|^alias/[a-zA-Z0-9/_-]+$|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}`), "must be a valid KMS Key ARN or Alias"),
+												},
+												"log_location": {
+													Type:             schema.TypeString,
+													Optional:         true,
+													DiffSuppressFunc: diffSuppressWorkGroupConfigurationMonitoringS3Logging,
+													ValidateFunc: validation.All(
+														validation.StringLenBetween(1, 1024),
+														validation.StringMatch(regexache.MustCompile(`^s3://[a-z0-9][a-z0-9\-]*[a-z0-9](/.*)?$`), "must be a valid S3 URI starting with s3://"),
+													),
+												},
+											},
+										},
+									},
+								},
+							},
+						},
 						"publish_cloudwatch_metrics_enabled": {
 							Type:     schema.TypeBool,
 							Optional: true,
 							Default:  true,
+						},
+						"query_results_s3_access_grants_configuration": {
+							Type:     schema.TypeList,
+							Optional: true,
+							MaxItems: 1,
+							Elem: &schema.Resource{
+								Schema: map[string]*schema.Schema{
+									"authentication_type": {
+										Type:             schema.TypeString,
+										Required:         true,
+										ValidateDiagFunc: enum.Validate[types.AuthenticationType](),
+									},
+									"enable_s3_access_grants": {
+										Type:     schema.TypeBool,
+										Required: true,
+									},
+									"create_user_level_prefix": {
+										Type:     schema.TypeBool,
+										Optional: true,
+									},
+								},
+							},
 						},
 						"result_configuration": {
 							Type:     schema.TypeList,
@@ -230,6 +505,27 @@ func resourceWorkGroup() *schema.Resource {
 	}
 }
 
+func diffSuppressWorkGroupConfigurationMonitoringCloudWatchLogging(_, old, new string, d *schema.ResourceData) bool {
+	if _, ok := d.GetOk("configuration.0.monitoring_configuration.0.cloud_watch_logging_configuration.0.enabled"); !ok {
+		return true
+	}
+	return false
+}
+
+func diffSuppressWorkGroupConfigurationMonitoringManagedLogging(_, old, new string, d *schema.ResourceData) bool {
+	if _, ok := d.GetOk("configuration.0.monitoring_configuration.0.managed_logging_configuration.0.enabled"); !ok {
+		return true
+	}
+	return false
+}
+
+func diffSuppressWorkGroupConfigurationMonitoringS3Logging(_, old, new string, d *schema.ResourceData) bool {
+	if _, ok := d.GetOk("configuration.0.monitoring_configuration.0.s3_logging_configuration.0.enabled"); !ok {
+		return true
+	}
+	return false
+}
+
 func resourceWorkGroupCreate(ctx context.Context, d *schema.ResourceData, meta any) diag.Diagnostics {
 	var diags diag.Diagnostics
 	conn := meta.(*conns.AWSClient).AthenaClient(ctx)
@@ -245,7 +541,16 @@ func resourceWorkGroupCreate(ctx context.Context, d *schema.ResourceData, meta a
 		input.Description = aws.String(v.(string))
 	}
 
-	_, err := conn.CreateWorkGroup(ctx, &input)
+	const (
+		timeout = 2 * time.Minute
+	)
+	_, err := tfresource.RetryWhenIsAErrorMessageContains[any, *types.InvalidRequestException](ctx, timeout,
+		func(ctx context.Context) (any, error) {
+			return conn.CreateWorkGroup(ctx, &input)
+		},
+		"Make sure that athena.amazonaws.com has been allowed for sts:AssumeRole",
+		//"You do not seem to have access to the S3 location of your query result",
+	)
 
 	if err != nil {
 		return sdkdiag.AppendErrorf(diags, "creating Athena WorkGroup (%s): %s", name, err)
@@ -315,6 +620,26 @@ func resourceWorkGroupUpdate(ctx context.Context, d *schema.ResourceData, meta a
 
 		if d.HasChange(names.AttrConfiguration) {
 			input.ConfigurationUpdates = expandWorkGroupConfigurationUpdates(d.Get(names.AttrConfiguration).([]any))
+			if d.HasChange("configuration.0.customer_content_encryption_configuration") {
+				if input.ConfigurationUpdates != nil && input.ConfigurationUpdates.CustomerContentEncryptionConfiguration == nil {
+					input.ConfigurationUpdates.RemoveCustomerContentEncryptionConfiguration = aws.Bool(true)
+				}
+			}
+			if d.HasChange("configuration.0.monitoring_configuration.0.cloud_watch_logging_configuration") {
+				if input.ConfigurationUpdates != nil && (input.ConfigurationUpdates.MonitoringConfiguration == nil || input.ConfigurationUpdates.MonitoringConfiguration.CloudWatchLoggingConfiguration == nil) {
+					input.ConfigurationUpdates.MonitoringConfiguration.CloudWatchLoggingConfiguration.Enabled = aws.Bool(false)
+				}
+			}
+			if d.HasChange("configuration.0.requester_pays_enabled") {
+				if input.ConfigurationUpdates != nil && input.ConfigurationUpdates.RequesterPaysEnabled == nil {
+					input.ConfigurationUpdates.RequesterPaysEnabled = aws.Bool(false)
+				}
+			}
+			if d.HasChange("configuration.0.enable_minimum_encryption_configuration") {
+				if input.ConfigurationUpdates != nil && input.ConfigurationUpdates.EnableMinimumEncryptionConfiguration == nil {
+					input.ConfigurationUpdates.EnableMinimumEncryptionConfiguration = aws.Bool(false)
+				}
+			}
 		}
 
 		if d.HasChange(names.AttrDescription) {
@@ -325,7 +650,15 @@ func resourceWorkGroupUpdate(ctx context.Context, d *schema.ResourceData, meta a
 			input.State = types.WorkGroupState(d.Get(names.AttrState).(string))
 		}
 
-		_, err := conn.UpdateWorkGroup(ctx, &input)
+		const (
+			timeout = 2 * time.Minute
+		)
+		_, err := tfresource.RetryWhenIsAErrorMessageContains[any, *types.InvalidRequestException](ctx, timeout,
+			func(ctx context.Context) (any, error) {
+				return conn.UpdateWorkGroup(ctx, &input)
+			},
+			"Make sure that athena.amazonaws.com has been allowed for sts:AssumeRole",
+		)
 
 		if err != nil {
 			return sdkdiag.AppendErrorf(diags, "updating Athena WorkGroup (%s): %s", d.Id(), err)
@@ -393,8 +726,20 @@ func expandWorkGroupConfiguration(l []any) *types.WorkGroupConfiguration {
 		configuration.BytesScannedCutoffPerQuery = aws.Int64(int64(v))
 	}
 
+	if v, ok := m["customer_content_encryption_configuration"]; ok {
+		configuration.CustomerContentEncryptionConfiguration = expandWorkGroupCustomerContentEncryptionConfiguration(v.([]any))
+	}
+
+	if v, ok := m["enable_minimum_encryption_configuration"].(bool); ok && v {
+		configuration.EnableMinimumEncryptionConfiguration = aws.Bool(v)
+	}
+
 	if v, ok := m["enforce_workgroup_configuration"].(bool); ok {
 		configuration.EnforceWorkGroupConfiguration = aws.Bool(v)
+	}
+
+	if v, ok := m["engine_configuration"]; ok {
+		configuration.EngineConfiguration = expandWorkGroupEngineConfiguration(v.([]any))
 	}
 
 	if v, ok := m[names.AttrEngineVersion].([]any); ok && len(v) > 0 && v[0] != nil {
@@ -413,19 +758,103 @@ func expandWorkGroupConfiguration(l []any) *types.WorkGroupConfiguration {
 		configuration.ManagedQueryResultsConfiguration = expandWorkGroupManagedQueryResultsConfiguration(v.([]any))
 	}
 
+	if v, ok := m["monitoring_configuration"]; ok {
+		configuration.MonitoringConfiguration = expandWorkGroupMonitoringConfiguration(v.([]any))
+	}
+
 	if v, ok := m["publish_cloudwatch_metrics_enabled"].(bool); ok {
 		configuration.PublishCloudWatchMetricsEnabled = aws.Bool(v)
+	}
+
+	if v, ok := m["query_results_s3_access_grants_configuration"]; ok {
+		configuration.QueryResultsS3AccessGrantsConfiguration = expandWorkGroupQueryResultsS3AccessGrantsConfiguration(v.([]any))
 	}
 
 	if v, ok := m["result_configuration"]; ok {
 		configuration.ResultConfiguration = expandWorkGroupResultConfiguration(v.([]any))
 	}
 
-	if v, ok := m["requester_pays_enabled"].(bool); ok {
+	if v, ok := m["requester_pays_enabled"].(bool); ok && v {
 		configuration.RequesterPaysEnabled = aws.Bool(v)
 	}
 
 	return configuration
+}
+
+func expandWorkGroupCustomerContentEncryptionConfiguration(l []any) *types.CustomerContentEncryptionConfiguration {
+	if len(l) == 0 || l[0] == nil {
+		return nil
+	}
+
+	m := l[0].(map[string]any)
+
+	// Only when KMS Key is specified, customerContentEncryptionConfiguration is created and returned
+	// Otherwise, return nil to avoid SDK error
+	if v, ok := m[names.AttrKMSKey].(string); ok && v != "" {
+		customerContentEncryptionConfiguration := &types.CustomerContentEncryptionConfiguration{
+			KmsKey: aws.String(v),
+		}
+		return customerContentEncryptionConfiguration
+	}
+	return nil
+}
+
+func expandWorkGroupEngineConfiguration(l []any) *types.EngineConfiguration {
+	if len(l) == 0 || l[0] == nil {
+		return nil
+	}
+	m := l[0].(map[string]any)
+
+	engineConfiguration := &types.EngineConfiguration{}
+
+	if v, ok := m["additional_configs"].(map[string]any); ok && len(v) > 0 {
+		additionalConfigs := make(map[string]string)
+		for key, value := range v {
+			additionalConfigs[key] = value.(string)
+		}
+		engineConfiguration.AdditionalConfigs = additionalConfigs
+	}
+
+	if v, ok := m["classification"].(*schema.Set); ok && v.Len() > 0 {
+		engineConfiguration.Classifications = expandWorkGroupEngineConfigurationClassifications(v)
+	}
+
+	if v, ok := m["coordinator_dpu_size"].(int); ok && v > 0 {
+		engineConfiguration.CoordinatorDpuSize = aws.Int32(int32(v))
+	}
+
+	if v, ok := m["default_executor_dpu_size"].(int); ok && v > 0 {
+		engineConfiguration.DefaultExecutorDpuSize = aws.Int32(int32(v))
+	}
+
+	if v, ok := m["max_concurrent_dpus"].(int); ok && v > 0 {
+		engineConfiguration.MaxConcurrentDpus = aws.Int32(int32(v))
+	}
+	if v, ok := m["spark_properties"].(map[string]any); ok && len(v) > 0 {
+		engineConfiguration.SparkProperties = flex.ExpandStringValueMap(v)
+	}
+
+	return engineConfiguration
+}
+
+func expandWorkGroupEngineConfigurationClassifications(set *schema.Set) []types.Classification {
+	classifications := make([]types.Classification, 0, set.Len())
+	for _, v := range set.List() {
+		m := v.(map[string]any)
+		classification := types.Classification{}
+		if v, ok := m[names.AttrName].(string); ok && v != "" {
+			classification.Name = aws.String(v)
+		}
+		if v, ok := m[names.AttrProperties].(map[string]any); ok && len(v) > 0 {
+			properties := make(map[string]string)
+			for key, value := range v {
+				properties[key] = value.(string)
+			}
+			classification.Properties = properties
+		}
+		classifications = append(classifications, classification)
+	}
+	return classifications
 }
 
 func expandWorkGroupEngineVersion(l []any) *types.EngineVersion {
@@ -459,8 +888,21 @@ func expandWorkGroupConfigurationUpdates(l []any) *types.WorkGroupConfigurationU
 		configurationUpdates.RemoveBytesScannedCutoffPerQuery = aws.Bool(true)
 	}
 
+	if v, ok := m["customer_content_encryption_configuration"]; ok {
+		configurationUpdates.CustomerContentEncryptionConfiguration = expandWorkGroupCustomerContentEncryptionConfiguration(v.([]any))
+	}
+
+	// Only when it is true, the value is set to avoid API error
+	if v, ok := m["enable_minimum_encryption_configuration"].(bool); ok && v {
+		configurationUpdates.EnableMinimumEncryptionConfiguration = aws.Bool(v)
+	}
+
 	if v, ok := m["enforce_workgroup_configuration"].(bool); ok {
 		configurationUpdates.EnforceWorkGroupConfiguration = aws.Bool(v)
+	}
+
+	if v, ok := m["engine_configuration"]; ok {
+		configurationUpdates.EngineConfiguration = expandWorkGroupEngineConfiguration(v.([]any))
 	}
 
 	if v, ok := m[names.AttrEngineVersion].([]any); ok && len(v) > 0 && v[0] != nil {
@@ -475,15 +917,24 @@ func expandWorkGroupConfigurationUpdates(l []any) *types.WorkGroupConfigurationU
 		configurationUpdates.ManagedQueryResultsConfigurationUpdates = expandWorkGroupManagedQueryResultsConfigurationUpdates(v.([]any))
 	}
 
+	if v, ok := m["monitoring_configuration"]; ok {
+		configurationUpdates.MonitoringConfiguration = expandWorkGroupMonitoringConfiguration(v.([]any))
+	}
+
 	if v, ok := m["publish_cloudwatch_metrics_enabled"].(bool); ok {
 		configurationUpdates.PublishCloudWatchMetricsEnabled = aws.Bool(v)
+	}
+
+	if v, ok := m["query_results_s3_access_grants_configuration"]; ok {
+		configurationUpdates.QueryResultsS3AccessGrantsConfiguration = expandWorkGroupQueryResultsS3AccessGrantsConfiguration(v.([]any))
 	}
 
 	if v, ok := m["result_configuration"]; ok {
 		configurationUpdates.ResultConfigurationUpdates = expandWorkGroupResultConfigurationUpdates(v.([]any))
 	}
 
-	if v, ok := m["requester_pays_enabled"].(bool); ok {
+	// Only when it is true, the value is set to avoid API error
+	if v, ok := m["requester_pays_enabled"].(bool); ok && v {
 		configurationUpdates.RequesterPaysEnabled = aws.Bool(v)
 	}
 
@@ -536,6 +987,131 @@ func expandWorkGroupResultConfiguration(l []any) *types.ResultConfiguration {
 	}
 
 	return resultConfiguration
+}
+
+func expandWorkGroupMonitoringConfiguration(l []any) *types.MonitoringConfiguration {
+	if len(l) == 0 || l[0] == nil {
+		return nil
+	}
+
+	m := l[0].(map[string]any)
+
+	monitoringConfiguration := &types.MonitoringConfiguration{}
+
+	if v, ok := m["cloud_watch_logging_configuration"]; ok {
+		monitoringConfiguration.CloudWatchLoggingConfiguration = expandWorkGroupMonitoringConfigurationCloudWatchLoggingConfiguration(v.([]any))
+	}
+
+	if v, ok := m["managed_logging_configuration"]; ok {
+		monitoringConfiguration.ManagedLoggingConfiguration = expandWorkGroupMonitoringConfigurationManagedLoggingConfiguration(v.([]any))
+	}
+
+	if v, ok := m["s3_logging_configuration"]; ok {
+		monitoringConfiguration.S3LoggingConfiguration = expandWorkGroupMonitoringConfigurationS3LoggingConfiguration(v.([]any))
+	}
+
+	return monitoringConfiguration
+}
+
+func expandWorkGroupMonitoringConfigurationCloudWatchLoggingConfiguration(l []any) *types.CloudWatchLoggingConfiguration {
+	if len(l) == 0 || l[0] == nil {
+		return nil
+	}
+
+	m := l[0].(map[string]any)
+
+	cloudWatchLoggingConfiguration := &types.CloudWatchLoggingConfiguration{}
+
+	if v, ok := m[names.AttrEnabled].(bool); ok {
+		cloudWatchLoggingConfiguration.Enabled = aws.Bool(v)
+	}
+
+	if v, ok := m["log_group"].(string); ok && v != "" {
+		cloudWatchLoggingConfiguration.LogGroup = aws.String(v)
+	}
+
+	if v, ok := m["log_stream_name_prefix"].(string); ok && v != "" {
+		cloudWatchLoggingConfiguration.LogStreamNamePrefix = aws.String(v)
+	}
+
+	if v, ok := m["log_type"].(*schema.Set); ok && v.Len() > 0 {
+		logTypes := make(map[string][]string)
+		for _, item := range v.List() {
+			m := item.(map[string]any)
+			if key, ok := m[names.AttrKey].(string); ok && key != "" {
+				if valueSet, ok := m[names.AttrValues].(*schema.Set); ok {
+					values := make([]string, 0, valueSet.Len())
+					for _, val := range valueSet.List() {
+						values = append(values, val.(string))
+					}
+					logTypes[key] = values
+				}
+			}
+		}
+		cloudWatchLoggingConfiguration.LogTypes = logTypes
+	}
+
+	return cloudWatchLoggingConfiguration
+}
+
+func expandWorkGroupMonitoringConfigurationManagedLoggingConfiguration(l []any) *types.ManagedLoggingConfiguration {
+	if len(l) == 0 || l[0] == nil {
+		return nil
+	}
+
+	m := l[0].(map[string]any)
+	managedLoggingConfiguration := &types.ManagedLoggingConfiguration{}
+
+	if v, ok := m[names.AttrEnabled].(bool); ok {
+		managedLoggingConfiguration.Enabled = aws.Bool(v)
+	}
+	if v, ok := m[names.AttrKMSKey].(string); ok && v != "" {
+		managedLoggingConfiguration.KmsKey = aws.String(v)
+	}
+	return managedLoggingConfiguration
+}
+
+func expandWorkGroupMonitoringConfigurationS3LoggingConfiguration(l []any) *types.S3LoggingConfiguration {
+	if len(l) == 0 || l[0] == nil {
+		return nil
+	}
+
+	m := l[0].(map[string]any)
+	s3LoggingConfiguration := &types.S3LoggingConfiguration{}
+
+	if v, ok := m[names.AttrEnabled].(bool); ok {
+		s3LoggingConfiguration.Enabled = aws.Bool(v)
+	}
+	if v, ok := m[names.AttrKMSKey].(string); ok && v != "" {
+		s3LoggingConfiguration.KmsKey = aws.String(v)
+	}
+	if v, ok := m["log_location"].(string); ok && v != "" {
+		s3LoggingConfiguration.LogLocation = aws.String(v)
+	}
+	return s3LoggingConfiguration
+}
+
+func expandWorkGroupQueryResultsS3AccessGrantsConfiguration(l []any) *types.QueryResultsS3AccessGrantsConfiguration {
+	if len(l) == 0 || l[0] == nil {
+		return nil
+	}
+
+	m := l[0].(map[string]any)
+	queryResultsS3AccessGrantsConfiguration := &types.QueryResultsS3AccessGrantsConfiguration{}
+
+	if v, ok := m["authentication_type"].(string); ok && v != "" {
+		queryResultsS3AccessGrantsConfiguration.AuthenticationType = types.AuthenticationType(v)
+	}
+
+	if v, ok := m["enable_s3_access_grants"].(bool); ok {
+		queryResultsS3AccessGrantsConfiguration.EnableS3AccessGrants = aws.Bool(v)
+	}
+
+	if v, ok := m["create_user_level_prefix"].(bool); ok {
+		queryResultsS3AccessGrantsConfiguration.CreateUserLevelPrefix = aws.Bool(v)
+	}
+
+	return queryResultsS3AccessGrantsConfiguration
 }
 
 func expandWorkGroupResultConfigurationUpdates(l []any) *types.ResultConfigurationUpdates {
@@ -663,18 +1239,70 @@ func flattenWorkGroupConfiguration(configuration *types.WorkGroupConfiguration) 
 	}
 
 	m := map[string]any{
-		"bytes_scanned_cutoff_per_query":      aws.ToInt64(configuration.BytesScannedCutoffPerQuery),
-		"enforce_workgroup_configuration":     aws.ToBool(configuration.EnforceWorkGroupConfiguration),
-		names.AttrEngineVersion:               flattenWorkGroupEngineVersion(configuration.EngineVersion),
-		"execution_role":                      aws.ToString(configuration.ExecutionRole),
-		"identity_center_configuration":       flattenWorkGroupIdentityCenterConfiguration(configuration.IdentityCenterConfiguration),
-		"managed_query_results_configuration": flattenWorkGroupManagedQueryResultsConfiguration(configuration.ManagedQueryResultsConfiguration),
-		"publish_cloudwatch_metrics_enabled":  aws.ToBool(configuration.PublishCloudWatchMetricsEnabled),
-		"result_configuration":                flattenWorkGroupResultConfiguration(configuration.ResultConfiguration),
-		"requester_pays_enabled":              aws.ToBool(configuration.RequesterPaysEnabled),
+		"bytes_scanned_cutoff_per_query":               aws.ToInt64(configuration.BytesScannedCutoffPerQuery),
+		"customer_content_encryption_configuration":    flattenWorkGroupCustomerContentEncryptionConfiguration(configuration.CustomerContentEncryptionConfiguration),
+		"enable_minimum_encryption_configuration":      aws.ToBool(configuration.EnableMinimumEncryptionConfiguration),
+		"enforce_workgroup_configuration":              aws.ToBool(configuration.EnforceWorkGroupConfiguration),
+		"engine_configuration":                         flattenWorkGroupEngineConfiguration(configuration.EngineConfiguration),
+		names.AttrEngineVersion:                        flattenWorkGroupEngineVersion(configuration.EngineVersion),
+		"execution_role":                               aws.ToString(configuration.ExecutionRole),
+		"identity_center_configuration":                flattenWorkGroupIdentityCenterConfiguration(configuration.IdentityCenterConfiguration),
+		"managed_query_results_configuration":          flattenWorkGroupManagedQueryResultsConfiguration(configuration.ManagedQueryResultsConfiguration),
+		"monitoring_configuration":                     flattenWorkGroupMonitoringConfiguration(configuration.MonitoringConfiguration),
+		"query_results_s3_access_grants_configuration": flattenWorkGroupQueryResultsS3AccessGrantsConfiguration(configuration.QueryResultsS3AccessGrantsConfiguration),
+		"publish_cloudwatch_metrics_enabled":           aws.ToBool(configuration.PublishCloudWatchMetricsEnabled),
+		"result_configuration":                         flattenWorkGroupResultConfiguration(configuration.ResultConfiguration),
+		"requester_pays_enabled":                       aws.ToBool(configuration.RequesterPaysEnabled),
 	}
 
 	return []any{m}
+}
+
+func flattenWorkGroupCustomerContentEncryptionConfiguration(encryptionConfiguration *types.CustomerContentEncryptionConfiguration) []any {
+	if encryptionConfiguration == nil {
+		return []any{}
+	}
+
+	m := map[string]any{
+		names.AttrKMSKey: aws.ToString(encryptionConfiguration.KmsKey),
+	}
+
+	return []any{m}
+}
+
+func flattenWorkGroupEngineConfiguration(engineConfiguration *types.EngineConfiguration) []any {
+	if engineConfiguration == nil {
+		return []any{}
+	}
+
+	m := map[string]any{
+		"additional_configs":        engineConfiguration.AdditionalConfigs,
+		"coordinator_dpu_size":      aws.ToInt32(engineConfiguration.CoordinatorDpuSize),
+		"default_executor_dpu_size": aws.ToInt32(engineConfiguration.DefaultExecutorDpuSize),
+		"max_concurrent_dpus":       aws.ToInt32(engineConfiguration.MaxConcurrentDpus),
+		"spark_properties":          flex.FlattenStringValueMap(engineConfiguration.SparkProperties),
+	}
+
+	if len(engineConfiguration.Classifications) > 0 {
+		m["classification"] = flattenWorkGroupEngineConfigurationClassifications(engineConfiguration.Classifications)
+	}
+
+	return []any{m}
+}
+
+func flattenWorkGroupEngineConfigurationClassifications(classifications []types.Classification) []any {
+	result := make([]any, 0, len(classifications))
+	for _, classification := range classifications {
+		m := map[string]any{}
+		if classification.Name != nil {
+			m[names.AttrName] = aws.ToString(classification.Name)
+		}
+		if len(classification.Properties) > 0 {
+			m[names.AttrProperties] = classification.Properties
+		}
+		result = append(result, m)
+	}
+	return result
 }
 
 func flattenWorkGroupEngineVersion(engineVersion *types.EngineVersion) []any {
@@ -698,6 +1326,87 @@ func flattenWorkGroupIdentityCenterConfiguration(identityCenterConfiguration *ty
 	m := map[string]any{
 		"enable_identity_center":       aws.ToBool(identityCenterConfiguration.EnableIdentityCenter),
 		"identity_center_instance_arn": aws.ToString(identityCenterConfiguration.IdentityCenterInstanceArn),
+	}
+
+	return []any{m}
+}
+
+func flattenWorkGroupMonitoringConfiguration(monitoringConfiguration *types.MonitoringConfiguration) []any {
+	if monitoringConfiguration == nil {
+		return []any{}
+	}
+
+	m := map[string]any{
+		"cloud_watch_logging_configuration": flattenWorkGroupMonitoringConfigurationCloudWatchLoggingConfiguration(monitoringConfiguration.CloudWatchLoggingConfiguration),
+		"managed_logging_configuration":     flattenWorkGroupMonitoringConfigurationManagedLoggingConfiguration(monitoringConfiguration.ManagedLoggingConfiguration),
+		"s3_logging_configuration":          flattenWorkGroupMonitoringConfigurationS3LoggingConfiguration(monitoringConfiguration.S3LoggingConfiguration),
+	}
+
+	return []any{m}
+}
+
+func flattenWorkGroupMonitoringConfigurationCloudWatchLoggingConfiguration(cloudWatchLoggingConfiguration *types.CloudWatchLoggingConfiguration) []any {
+	if cloudWatchLoggingConfiguration == nil {
+		return []any{}
+	}
+
+	m := map[string]any{
+		names.AttrEnabled:        aws.ToBool(cloudWatchLoggingConfiguration.Enabled),
+		"log_group":              aws.ToString(cloudWatchLoggingConfiguration.LogGroup),
+		"log_stream_name_prefix": aws.ToString(cloudWatchLoggingConfiguration.LogStreamNamePrefix),
+	}
+
+	if len(cloudWatchLoggingConfiguration.LogTypes) > 0 {
+		logTypes := make([]any, 0, len(cloudWatchLoggingConfiguration.LogTypes))
+		for key, values := range cloudWatchLoggingConfiguration.LogTypes {
+			logTypeMap := map[string]any{
+				names.AttrKey:    key,
+				names.AttrValues: values,
+			}
+			logTypes = append(logTypes, logTypeMap)
+		}
+		m["log_type"] = logTypes
+	}
+
+	return []any{m}
+}
+
+func flattenWorkGroupMonitoringConfigurationManagedLoggingConfiguration(managedLoggingConfiguration *types.ManagedLoggingConfiguration) []any {
+	if managedLoggingConfiguration == nil {
+		return []any{}
+	}
+
+	m := map[string]any{
+		names.AttrEnabled: aws.ToBool(managedLoggingConfiguration.Enabled),
+		names.AttrKMSKey:  aws.ToString(managedLoggingConfiguration.KmsKey),
+	}
+
+	return []any{m}
+}
+
+func flattenWorkGroupMonitoringConfigurationS3LoggingConfiguration(s3LoggingConfiguration *types.S3LoggingConfiguration) []any {
+	if s3LoggingConfiguration == nil {
+		return []any{}
+	}
+
+	m := map[string]any{
+		names.AttrEnabled: aws.ToBool(s3LoggingConfiguration.Enabled),
+		names.AttrKMSKey:  aws.ToString(s3LoggingConfiguration.KmsKey),
+		"log_location":    aws.ToString(s3LoggingConfiguration.LogLocation),
+	}
+
+	return []any{m}
+}
+
+func flattenWorkGroupQueryResultsS3AccessGrantsConfiguration(queryResultsS3AccessGrantsConfiguration *types.QueryResultsS3AccessGrantsConfiguration) []any {
+	if queryResultsS3AccessGrantsConfiguration == nil {
+		return []any{}
+	}
+
+	m := map[string]any{
+		"authentication_type":      queryResultsS3AccessGrantsConfiguration.AuthenticationType,
+		"enable_s3_access_grants":  aws.ToBool(queryResultsS3AccessGrantsConfiguration.EnableS3AccessGrants),
+		"create_user_level_prefix": aws.ToBool(queryResultsS3AccessGrantsConfiguration.CreateUserLevelPrefix),
 	}
 
 	return []any{m}
