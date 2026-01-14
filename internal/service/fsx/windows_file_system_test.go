@@ -13,6 +13,7 @@ import (
 	awstypes "github.com/aws/aws-sdk-go-v2/service/fsx/types"
 	sdkacctest "github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-provider-aws/internal/acctest"
 	"github.com/hashicorp/terraform-provider-aws/internal/conns"
@@ -910,6 +911,70 @@ func TestAccFSxWindowsFileSystem_diskIops(t *testing.T) {
 	})
 }
 
+func TestAccFSxWindowsFileSystem_fsrmConfiguration(t *testing.T) {
+	ctx := acctest.Context(t)
+	var filesystem awstypes.FileSystem
+	resourceName := "aws_fsx_windows_file_system.test"
+	rName := sdkacctest.RandomWithPrefix(acctest.ResourcePrefix)
+	domainName := acctest.RandomDomainName()
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheck(ctx, t); acctest.PreCheckPartitionHasService(t, names.FSxEndpointID) },
+		ErrorCheck:               acctest.ErrorCheck(t, names.FSxServiceID),
+		ProtoV5ProviderFactories: acctest.ProtoV5ProviderFactories,
+		CheckDestroy:             testAccCheckWindowsFileSystemDestroy(ctx),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccWindowsFileSystemConfig_fsrmConfiguration(rName, domainName, true, "test1"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckWindowsFileSystemExists(ctx, resourceName, &filesystem),
+					acctest.MatchResourceAttrRegionalARN(ctx, resourceName, names.AttrARN, "fsx", regexache.MustCompile(`file-system/fs-.+`)),
+					resource.TestCheckResourceAttr(resourceName, "fsrm_configuration.#", "1"),
+					resource.TestCheckResourceAttr(resourceName, "fsrm_configuration.0.fsrm_service_enabled", acctest.CtTrue),
+					resource.TestCheckResourceAttrPair(resourceName, "fsrm_configuration.0.event_log_destination", "aws_cloudwatch_log_group.test1", names.AttrName),
+				),
+			},
+			{
+				ResourceName:      resourceName,
+				ImportState:       true,
+				ImportStateVerify: true,
+				ImportStateVerifyIgnore: []string{
+					"final_backup_tags",
+					names.AttrSecurityGroupIDs,
+					"skip_final_backup",
+				},
+			},
+			{
+				Config: testAccWindowsFileSystemConfig_fsrmConfiguration(rName, domainName, true, "test2"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckWindowsFileSystemExists(ctx, resourceName, &filesystem),
+					acctest.MatchResourceAttrRegionalARN(ctx, resourceName, names.AttrARN, "fsx", regexache.MustCompile(`file-system/fs-.+`)),
+					resource.TestCheckResourceAttr(resourceName, "fsrm_configuration.#", "1"),
+					resource.TestCheckResourceAttr(resourceName, "fsrm_configuration.0.fsrm_service_enabled", acctest.CtTrue),
+					resource.TestCheckResourceAttrPair(resourceName, "fsrm_configuration.0.event_log_destination", "aws_cloudwatch_log_group.test2", names.AttrName),
+				),
+			},
+			{
+				Config: testAccWindowsFileSystemConfig_fsrmConfiguration(rName, domainName, false, "test2"),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckWindowsFileSystemExists(ctx, resourceName, &filesystem),
+					acctest.MatchResourceAttrRegionalARN(ctx, resourceName, names.AttrARN, "fsx", regexache.MustCompile(`file-system/fs-.+`)),
+					resource.TestCheckResourceAttr(resourceName, "fsrm_configuration.#", "1"),
+					resource.TestCheckResourceAttr(resourceName, "fsrm_configuration.0.fsrm_service_enabled", acctest.CtFalse),
+				),
+			},
+			{
+				Config: testAccWindowsFileSystemConfig_basic(rName, domainName),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(resourceName, plancheck.ResourceActionNoop),
+					},
+				},
+			},
+		},
+	})
+}
+
 func testAccCheckWindowsFileSystemExists(ctx context.Context, n string, v *awstypes.FileSystem) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		rs, ok := s.RootModule().Resources[n]
@@ -1522,4 +1587,29 @@ resource "aws_fsx_windows_file_system" "test" {
   }
 }
 `, rName, iops))
+}
+
+func testAccWindowsFileSystemConfig_fsrmConfiguration(rName, domain string, fsrmServiceEnabled bool, logGroupIdentifier string) string {
+	return acctest.ConfigCompose(testAccWindowsFileSystemConfig_base(rName, domain), fmt.Sprintf(`
+resource "aws_cloudwatch_log_group" "test1" {
+  name = "/aws/fsx/%[1]s-1"
+}
+
+resource "aws_cloudwatch_log_group" "test2" {
+  name = "/aws/fsx/%[1]s-2"
+}
+
+resource "aws_fsx_windows_file_system" "test" {
+  active_directory_id = aws_directory_service_directory.test.id
+  skip_final_backup   = true
+  storage_capacity    = 32
+  subnet_ids          = [aws_subnet.test[0].id]
+  throughput_capacity = 128
+
+  fsrm_configuration {
+    fsrm_service_enabled  = %[2]t
+    event_log_destination = aws_cloudwatch_log_group.%[3]s.arn 
+  }
+}
+`, rName, fsrmServiceEnabled, logGroupIdentifier))
 }

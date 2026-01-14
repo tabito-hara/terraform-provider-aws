@@ -169,6 +169,40 @@ func resourceWindowsFileSystem() *schema.Resource {
 				Computed: true,
 			},
 			"final_backup_tags": tftags.TagsSchema(),
+			"fsrm_configuration": {
+				Type:     schema.TypeList,
+				Optional: true,
+				MaxItems: 1,
+				DiffSuppressFunc: func(k, old, new string, d *schema.ResourceData) bool {
+					o, n := d.GetChange("fsrm_configuration")
+					if v := o.([]any); len(v) > 0 {
+						if v, ok := v[0].(map[string]any); ok {
+							if v, ok := v["fsrm_service_enabled"].(bool); ok && !v && len(n.([]any)) == 0 {
+								return true
+							}
+						}
+					}
+					return false
+				},
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"event_log_destination": {
+							Type:     schema.TypeString,
+							Optional: true,
+							DiffSuppressFunc: func(k, old, new string, d *schema.ResourceData) bool {
+								if v := d.Get("fsrm_configuration.0.fsrm_service_enabled"); v != nil && !v.(bool) {
+									return true
+								}
+								return false
+							},
+						},
+						"fsrm_service_enabled": {
+							Type:     schema.TypeBool,
+							Required: true,
+						},
+					},
+				},
+			},
 			names.AttrKMSKeyID: {
 				Type:         schema.TypeString,
 				Optional:     true,
@@ -358,6 +392,11 @@ func resourceWindowsFileSystemCreate(ctx context.Context, d *schema.ResourceData
 		inputB.WindowsConfiguration.DeploymentType = awstypes.WindowsDeploymentType(v.(string))
 	}
 
+	if v, ok := d.GetOk("fsrm_configuration"); ok && len(v.([]any)) > 0 {
+		inputC.WindowsConfiguration.FsrmConfiguration = expandWindowsFsrmConfiguration(v.([]any))
+		inputB.WindowsConfiguration.FsrmConfiguration = expandWindowsFsrmConfiguration(v.([]any))
+	}
+
 	if v, ok := d.GetOk(names.AttrKMSKeyID); ok {
 		inputC.KmsKeyId = aws.String(v.(string))
 		inputB.KmsKeyId = aws.String(v.(string))
@@ -448,6 +487,9 @@ func resourceWindowsFileSystemRead(ctx context.Context, d *schema.ResourceData, 
 		return sdkdiag.AppendErrorf(diags, "setting disk_iops_configuration: %s", err)
 	}
 	d.Set(names.AttrDNSName, filesystem.DNSName)
+	if err := d.Set("fsrm_configuration", flattenWindowsFsrmConfiguration(windowsConfig.FsrmConfiguration)); err != nil {
+		return sdkdiag.AppendErrorf(diags, "setting fsrm_configuration: %s", err)
+	}
 	d.Set(names.AttrKMSKeyID, filesystem.KmsKeyId)
 	d.Set("network_interface_ids", filesystem.NetworkInterfaceIds)
 	d.Set(names.AttrOwnerID, filesystem.OwnerId)
@@ -570,6 +612,14 @@ func resourceWindowsFileSystemUpdate(ctx context.Context, d *schema.ResourceData
 
 		if d.HasChange("disk_iops_configuration") {
 			input.WindowsConfiguration.DiskIopsConfiguration = expandWindowsDiskIopsConfiguration(d.Get("disk_iops_configuration").([]any))
+		}
+
+		if d.HasChange("fsrm_configuration") {
+			if v, ok := d.GetOk("fsrm_configuration"); ok && len(v.([]any)) > 0 {
+				input.WindowsConfiguration.FsrmConfiguration = expandWindowsFsrmConfiguration(v.([]any))
+			} else {
+				input.WindowsConfiguration.FsrmConfiguration.FsrmServiceEnabled = aws.Bool(false)
+			}
 		}
 
 		if d.HasChange("self_managed_active_directory") {
@@ -801,6 +851,42 @@ func flattenWindowsDiskIopsConfiguration(rs *awstypes.DiskIopsConfiguration) []a
 	m[names.AttrMode] = string(rs.Mode)
 
 	return []any{m}
+}
+
+func expandWindowsFsrmConfiguration(l []any) *awstypes.WindowsFsrmConfiguration {
+	if len(l) == 0 || l[0] == nil {
+		return nil
+	}
+	data := l[0].(map[string]any)
+	apiObject := &awstypes.WindowsFsrmConfiguration{}
+
+	if v, ok := data["event_log_destination"].(string); ok && v != "" {
+		apiObject.EventLogDestination = aws.String(v)
+	}
+
+	if v, ok := data["fsrm_service_enabled"].(bool); ok {
+		apiObject.FsrmServiceEnabled = aws.Bool(v)
+	}
+
+	return apiObject
+}
+
+func flattenWindowsFsrmConfiguration(rs *awstypes.WindowsFsrmConfiguration) []map[string]any {
+	if rs == nil {
+		return []map[string]any{}
+	}
+
+	m := map[string]any{}
+
+	if rs.EventLogDestination != nil {
+		m["event_log_destination"] = aws.ToString(rs.EventLogDestination)
+	}
+
+	if rs.FsrmServiceEnabled != nil {
+		m["fsrm_service_enabled"] = aws.ToBool(rs.FsrmServiceEnabled)
+	}
+
+	return []map[string]any{m}
 }
 
 func windowsAuditLogStateFunc(v any) string {

@@ -96,6 +96,22 @@ func dataSourceWindowsFileSystem() *schema.Resource {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
+			"fsrm_configuration": {
+				Type:     schema.TypeList,
+				Computed: true,
+				Elem: &schema.Resource{
+					Schema: map[string]*schema.Schema{
+						"event_log_destination": {
+							Type:     schema.TypeString,
+							Computed: true,
+						},
+						"fsrm_service_enabled": {
+							Type:     schema.TypeBool,
+							Computed: true,
+						},
+					},
+				},
+			},
 			names.AttrID: {
 				Type:     schema.TypeString,
 				Required: true,
@@ -194,6 +210,9 @@ func dataSourceWindowsFileSystemRead(ctx context.Context, d *schema.ResourceData
 		return sdkdiag.AppendErrorf(diags, "setting disk_iops_configuration: %s", err)
 	}
 	d.Set(names.AttrDNSName, filesystem.DNSName)
+	if err := d.Set("fsrm_configuration", flattenWindowsFsrmConfiguration(windowsConfig.FsrmConfiguration)); err != nil {
+		return sdkdiag.AppendErrorf(diags, "setting fsrm_configuration: %s", err)
+	}
 	d.Set(names.AttrID, filesystem.FileSystemId)
 	d.Set(names.AttrKMSKeyID, filesystem.KmsKeyId)
 	d.Set("network_interface_ids", filesystem.NetworkInterfaceIds)
