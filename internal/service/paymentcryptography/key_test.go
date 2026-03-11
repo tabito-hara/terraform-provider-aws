@@ -46,6 +46,7 @@ func TestAccPaymentCryptographyKey_basic(t *testing.T) {
 				Config: testAccKeyConfig_basic(rName),
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckKeyExists(ctx, t, resourceName, &key),
+					resource.TestCheckNoResourceAttr(resourceName, "derive_key_usage"),
 					resource.TestCheckResourceAttr(resourceName, names.AttrEnabled, acctest.CtTrue),
 					resource.TestCheckResourceAttr(resourceName, "exportable", acctest.CtTrue),
 					resource.TestCheckResourceAttr(resourceName, "key_attributes.#", "1"),
@@ -172,6 +173,54 @@ func TestAccPaymentCryptographyKey_update(t *testing.T) {
 					resource.TestCheckResourceAttr(resourceName, names.AttrEnabled, acctest.CtTrue),
 					acctest.MatchResourceAttrRegionalARN(ctx, resourceName, names.AttrARN, "payment-cryptography", regexache.MustCompile(`key/.+`)),
 				),
+			},
+		},
+	})
+}
+
+func TestAccPaymentCryptographyKey_deriveKeyUsage(t *testing.T) {
+	ctx := acctest.Context(t)
+	if testing.Short() {
+		t.Skip("skipping long-running test in short mode")
+	}
+
+	var key paymentcryptography.GetKeyOutput
+	rName := acctest.RandomWithPrefix(t, acctest.ResourcePrefix)
+	resourceName := "aws_paymentcryptography_key.test"
+
+	acctest.ParallelTest(ctx, t, resource.TestCase{
+		PreCheck: func() {
+			acctest.PreCheck(ctx, t)
+			testAccPreCheck(ctx, t)
+		},
+		ErrorCheck:               acctest.ErrorCheck(t, names.PaymentCryptographyServiceID),
+		ProtoV5ProviderFactories: acctest.ProtoV5ProviderFactories,
+		CheckDestroy:             testAccCheckKeyDestroy(ctx, t),
+		Steps: []resource.TestStep{
+			{
+				Config: testAccKeyConfig_deriveKeyUsage(rName, string(types.KeyUsageTr31B0BaseDerivationKey)),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckKeyExists(ctx, t, resourceName, &key),
+					resource.TestCheckResourceAttr(resourceName, "derive_key_usage", string(types.KeyUsageTr31B0BaseDerivationKey)),
+					resource.TestCheckResourceAttr(resourceName, names.AttrEnabled, acctest.CtTrue),
+					resource.TestCheckResourceAttr(resourceName, "exportable", acctest.CtTrue),
+					resource.TestCheckResourceAttr(resourceName, "key_attributes.#", "1"),
+					resource.TestCheckResourceAttr(resourceName, "key_attributes.0.key_algorithm", "TDES_3KEY"),
+					resource.TestCheckResourceAttr(resourceName, "key_attributes.0.key_class", "SYMMETRIC_KEY"),
+					resource.TestCheckResourceAttr(resourceName, "key_attributes.0.key_usage", "TR31_P0_PIN_ENCRYPTION_KEY"),
+					resource.TestCheckResourceAttr(resourceName, "key_attributes.0.key_modes_of_use.#", "1"),
+					resource.TestCheckResourceAttr(resourceName, "key_attributes.0.key_modes_of_use.0.decrypt", acctest.CtTrue),
+					resource.TestCheckResourceAttr(resourceName, "key_attributes.0.key_modes_of_use.0.encrypt", acctest.CtTrue),
+					resource.TestCheckResourceAttr(resourceName, "key_attributes.0.key_modes_of_use.0.wrap", acctest.CtTrue),
+					resource.TestCheckResourceAttr(resourceName, "key_attributes.0.key_modes_of_use.0.unwrap", acctest.CtTrue),
+					acctest.MatchResourceAttrRegionalARN(ctx, resourceName, names.AttrARN, "payment-cryptography", regexache.MustCompile(`key/[0-9a-z]{16}$`)),
+				),
+			},
+			{
+				ResourceName:            resourceName,
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"deletion_window_in_days"},
 			},
 		},
 	})
@@ -447,6 +496,56 @@ resource "aws_paymentcryptography_key" "test" {
       unwrap  = true
     }
   }
+  tags = {
+    Name  = %[1]q
+    Other = "Value"
+  }
+}
+`, rName)
+}
+
+func testAccKeyConfig_deriveKeyUsage(rName, deriveKeyUsage string) string {
+	return fmt.Sprintf(`
+resource "aws_paymentcryptography_key" "test" {
+  derive_key_usage = %[2]q
+  exportable = true
+  key_attributes {
+    key_algorithm = "TDES_3KEY"
+    key_class     = "SYMMETRIC_KEY"
+    key_usage     = "TR31_P0_PIN_ENCRYPTION_KEY"
+    key_modes_of_use {
+      decrypt = true
+      encrypt = true
+      wrap    = true
+      unwrap  = true
+    }
+  }
+  tags = {
+    Name  = %[1]q
+    Other = "Value"
+  }
+}
+`, rName, deriveKeyUsage)
+}
+
+func testAccKeyConfig_replicationRegions(rName string) string {
+	return fmt.Sprintf(`
+resource "aws_paymentcryptography_key" "test" {
+  exportable = true
+  key_attributes {
+    key_algorithm = "TDES_3KEY"
+    key_class     = "SYMMETRIC_KEY"
+    key_usage     = "TR31_P0_PIN_ENCRYPTION_KEY"
+    key_modes_of_use {
+      decrypt = true
+      encrypt = true
+      wrap    = true
+      unwrap  = true
+    }
+  }
+
+  replication_regions = ["us-west-2", "eu-west-1"]
+
   tags = {
     Name  = %[1]q
     Other = "Value"

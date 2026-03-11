@@ -19,6 +19,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -77,6 +78,13 @@ func (r *keyResource) Schema(ctx context.Context, request resource.SchemaRequest
 					int64validator.Between(3, 180),
 				},
 			},
+			"derive_key_usage": schema.StringAttribute{
+				CustomType: fwtypes.StringEnumType[awstypes.DeriveKeyUsage](),
+				Optional:   true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
 			names.AttrEnabled: schema.BoolAttribute{
 				Optional: true,
 				Computed: true,
@@ -117,6 +125,13 @@ func (r *keyResource) Schema(ctx context.Context, request resource.SchemaRequest
 				CustomType: fwtypes.StringEnumType[awstypes.KeyState](),
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"replication_regions": schema.ListAttribute{
+				CustomType: fwtypes.ListOfStringType,
+				Optional:   true,
+				PlanModifiers: []planmodifier.List{
+					listplanmodifier.RequiresReplace(),
 				},
 			},
 			names.AttrTags:    tftags.TagsAttribute(),
@@ -516,6 +531,7 @@ type keyResourceModel struct {
 	framework.WithRegionModel
 	KeyARN                 types.String                                        `tfsdk:"arn"`
 	DeletionWindowInDays   types.Int64                                         `tfsdk:"deletion_window_in_days"`
+	DeriveKeyUsage         fwtypes.StringEnum[awstypes.DeriveKeyUsage]         `tfsdk:"derive_key_usage"`
 	Enabled                types.Bool                                          `tfsdk:"enabled"`
 	Exportable             types.Bool                                          `tfsdk:"exportable"`
 	ID                     types.String                                        `tfsdk:"id"`
@@ -524,6 +540,7 @@ type keyResourceModel struct {
 	KeyCheckValueAlgorithm fwtypes.StringEnum[awstypes.KeyCheckValueAlgorithm] `tfsdk:"key_check_value_algorithm"`
 	KeyOrigin              fwtypes.StringEnum[awstypes.KeyOrigin]              `tfsdk:"key_origin"`
 	KeyState               fwtypes.StringEnum[awstypes.KeyState]               `tfsdk:"key_state"`
+	ReplicationRegions     fwtypes.ListOfString                                `tfsdk:"replication_regions"`
 	Tags                   tftags.Map                                          `tfsdk:"tags"`
 	TagsAll                tftags.Map                                          `tfsdk:"tags_all"`
 	Timeouts               timeouts.Value                                      `tfsdk:"timeouts"`
