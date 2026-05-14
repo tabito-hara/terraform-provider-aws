@@ -188,20 +188,24 @@ func (m errorIfSingleBlockRemoved_) PlanModifyList(ctx context.Context, req plan
 		return
 	}
 
-	var plannedType awstypes.OverrideType
+	var plannedType fwtypes.StringEnum[awstypes.OverrideType]
 	overrideTypePath := path.Root(names.AttrConfiguration).AtListIndex(0).AtName(names.AttrType)
 	smerr.AddEnrich(ctx, &resp.Diagnostics, req.Plan.GetAttribute(ctx, overrideTypePath, &plannedType))
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	var stateType awstypes.OverrideType
+	var stateType fwtypes.StringEnum[awstypes.OverrideType]
 	smerr.AddEnrich(ctx, &resp.Diagnostics, req.State.GetAttribute(ctx, overrideTypePath, &stateType))
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	if plannedType != stateType {
+	if plannedType.IsNull() || plannedType.IsUnknown() || stateType.IsNull() || stateType.IsUnknown() {
+		return
+	}
+
+	if plannedType.ValueEnum() != stateType.ValueEnum() {
 		return
 	}
 
